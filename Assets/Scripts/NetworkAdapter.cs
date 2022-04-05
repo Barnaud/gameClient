@@ -15,6 +15,10 @@ public class NetworkAdapter : MonoBehaviour
     private byte[] receiveBytes;
     IPEndPoint serverEndpoint;
 
+    private bool isSyncing = true;
+    private double msLatency;
+    private DateTime beforeClientSend;
+
     // Start is called before the first frame update
     void Start()
     {
@@ -24,6 +28,7 @@ public class NetworkAdapter : MonoBehaviour
         client.Connect(ServerConstants.url, ServerConstants.server_port);
 
         byte[] sendBytes = { 2, 8, 6 };
+        beforeClientSend = DateTime.Now;
         client.Send(sendBytes, 3);
         Debug.Log("Sent 3 bytes");
         /*      while (true)
@@ -53,8 +58,14 @@ public class NetworkAdapter : MonoBehaviour
         try
         {
             byte[] receivedData = client.EndReceive(res, ref serverEndpoint);
+            if (isSyncing)
+            {
+                msLatency = (DateTime.Now - beforeClientSend).TotalMilliseconds;
+                isSyncing = false;
+                Debug.Log($"Initialization done: {msLatency} ms of latency");
+            }
             client.BeginReceive(receiveCallback, null);
-            //Debug.Log("Received data from server;");
+            Debug.Log("Received data from server;");
             if (receivedData.Length > 1)
             {
                 Dictionary<uint, Vector3> newState = decodeReceivedData(receivedData);
@@ -84,7 +95,7 @@ public class NetworkAdapter : MonoBehaviour
             float x = BitConverter.ToSingle(receivedData, 5 + (16 * i));
             float y = BitConverter.ToSingle(receivedData, 9 + (16 * i));
             float z = BitConverter.ToSingle(receivedData, 13 + (16 * i));
-           // Debug.Log("Got position: ");
+            //Debug.Log("Got position: ");
             //Debug.Log(x);
             //Debug.Log(y);
             //Debug.Log(z);
