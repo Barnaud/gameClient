@@ -14,7 +14,7 @@ public class testScript : MonoBehaviour
 
     private void Update()
     {
-        Debug.Log($"Transform.position: {transform.position.ToString("F4")}");
+        //Debug.Log($"Transform.position: {transform.position.ToString("F4")}");
     }
 
     // Update is called once per frame

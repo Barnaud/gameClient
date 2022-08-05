@@ -2,7 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-public class Character : GameObject
+public class Character : MultiplayerGameObject
 {
 
     public float default_speed;
