@@ -40,7 +40,6 @@ public class MultiplayerGameObject : MonoBehaviour
         Debug.Log("Creating gameObject in start");
         //uid = assignUid(this);
         //Temp until auto uid assign
-        dict[uid] = this;
         //end temp
         characterAnim = GetComponent<Animator>();
         characterRb = GetComponent<Rigidbody>();
@@ -50,6 +49,12 @@ public class MultiplayerGameObject : MonoBehaviour
         diagStopWatch.Start();
 
         //moveToLocationStraight(new Vector2(5, 6));
+    }
+
+    public void setUid(uint new_uid)
+    {
+        uid = new_uid;
+        dict[uid] = this;
     }
 
     private void Update()

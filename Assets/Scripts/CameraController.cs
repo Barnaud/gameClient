@@ -3,7 +3,7 @@ using UnityEngine;
 public class CameraController : MonoBehaviour
 {
     public GameObject objectToFollow;
-    public int followMaxAngle = 30;
+    public int followMaxAngle = 10;
     
     private float altitudeToObject;
     private Vector3 verticalMovementVector;

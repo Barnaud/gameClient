@@ -14,7 +14,7 @@ public class NetworkedClock
     private int[] measuredRTTs = new int[9];
     private int[] measuredClockDeltas = new int[9];
     private char measuredRttCount = (char) 0;
-    bool hasEnoughValues = false;
+    private bool hasEnoughValues = false;
 
     //void requestRTT(client)
     public void init(UdpClient client)
@@ -35,7 +35,7 @@ public class NetworkedClock
             while (true)
             {
                 requestTTS();
-                await Task.Delay(1000);
+                await Task.Delay(100);
 
             }
         });
@@ -54,12 +54,13 @@ public class NetworkedClock
 
     public Int64 getRemoteTimestampMs()
     {
+        Debug.Log($"LocalTimeStamp: {NetworkedClock.getLocalTimestampMs()}");
+        Debug.Log($"Delta: {getMedianClockDeltas()}");
         return NetworkedClock.getLocalTimestampMs() + getMedianClockDeltas();
     }
 
     private void requestTTS()
     {
-        Int64 currentTimestamp = getLocalTimestampMs();
         byte[] request = new byte[9];
         request[0] = 2;
         Buffer.BlockCopy(BitConverter.GetBytes(getLocalTimestampMs()), 0, request, 1, 8);
@@ -107,6 +108,11 @@ public class NetworkedClock
         return sortedRTTs[4];
     }
 
+    public bool isReady()
+    {
+        return hasEnoughValues;
+    }
+
     private int getMedianClockDeltas()
     {
         if (!hasEnoughValues)
@@ -118,5 +124,17 @@ public class NetworkedClock
         Array.Sort(sortedDeltas);
         return sortedDeltas[4];
     }
+
+    private Int64 getServerTime()
+    {
+        if (hasEnoughValues)
+        {
+            return getLocalTimestampMs() + getMedianClockDeltas();
+        }
+        Debug.LogWarning("Tried to get server time while networkedClock is not initialized");
+        return getLocalTimestampMs();
+    }
+
+
 
 }
