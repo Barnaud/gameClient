@@ -18,18 +18,18 @@ public class MultiplayerGameObject : MonoBehaviour
         return newUid;
     }
 
-    protected Animator characterAnim;
     protected Rigidbody characterRb;
     protected Vector2 dest;
-    protected bool shouldMove = false;
 
-    protected Vector3 serverRequestedPosition;
+    protected Vector3? serverRequestedPosition;
     protected bool shouldUpdateToServerPosition;
     protected float speed;
 
-    protected Animator playerAnim;
+    protected Animator animComponent;
 
     private System.Diagnostics.Stopwatch diagStopWatch;
+
+    private MultiplayerGameObjectAnimator customAnimator;
 
     public uint uid;
     public int maxSpeed = 200;
@@ -38,13 +38,10 @@ public class MultiplayerGameObject : MonoBehaviour
     void Start()
     {
         Debug.Log("Creating gameObject in start");
-        //uid = assignUid(this);
-        //Temp until auto uid assign
-        //end temp
-        characterAnim = GetComponent<Animator>();
         characterRb = GetComponent<Rigidbody>();
         dest = VectorUtils.toVec2(transform.position);
-        playerAnim = GetComponent<Animator>();
+        animComponent = GetComponent<Animator>();
+        customAnimator = new MultiplayerGameObjectAnimator(animComponent, maxSpeed);
         diagStopWatch = new System.Diagnostics.Stopwatch();
         diagStopWatch.Start();
 
@@ -87,18 +84,23 @@ public class MultiplayerGameObject : MonoBehaviour
                     characterRb.MovePosition(transform.position + VectorUtils.toVec3(movementVector));
                 }
         */
-        playerAnim.SetInteger("speed", Mathf.RoundToInt(speed * 100));
+        //animComponent.SetInteger("speed", Mathf.RoundToInt(speed * 100));
 
-        if (shouldUpdateToServerPosition)
+        //If server sent the position of a gameObject, register it, so it is applied on the gameObject afterwards
+        if (shouldUpdateToServerPosition && serverRequestedPosition is Vector3 serverRequestedPositionValue)
         {
-            this.moveByNextTick(VectorUtils.toVec2(this.serverRequestedPosition));
+            Debug.Log($"Will move to position by newt tick: {serverRequestedPositionValue}");
+            this.moveByNextTick(VectorUtils.toVec2(serverRequestedPositionValue));
             shouldUpdateToServerPosition = false;
-
+            customAnimator.registerSpeed(Mathf.RoundToInt(speed * 100));
+            customAnimator.animateGameObject();
         }
+
+
         Vector2 movementVector = this.dest - VectorUtils.toVec2(transform.position);
-        if (movementVector.magnitude > 0 &&  Time.fixedDeltaTime * speed > 0)
+        if (movementVector.magnitude > 0 && Time.fixedDeltaTime * speed > 0)
         {
-            playerAnim.SetFloat("runAnimMultiplier", speed / maxSpeed * 100);
+            //animComponent.SetFloat("runAnimMultiplier", speed / maxSpeed * 100);
             Debug.Log(VectorUtils.toVec3(this.dest));
 
             //Debug.Log("isWalking: true");
@@ -126,31 +128,30 @@ public class MultiplayerGameObject : MonoBehaviour
 
             }
         }
-        else
-        {
-            //Debug.Log("Case 3");
-            //Debug.Log("isWalking: false");
-            playerAnim.SetInteger("speed", 0);
-            playerAnim.SetFloat("runAnimMultiplier", 1);
-        }
-
-
 
     }
 
     void moveToLocationStraight(Vector2 arg_dest, float moveSpeed = 0)
     {
-        this.shouldMove = true;
         this.dest = arg_dest;
         this.speed = moveSpeed;
     }
 
-    public void setServerRequestedPosition(Vector3 newRequestedPosition)
+    public void setServerRequestedPosition(Vector3? newRequestedPosition)
     {
         //Debug.Log($"newRequestedPosition: {newRequestedPosition.ToString("F4")}");
-        serverRequestedPosition = newRequestedPosition;
+        if (newRequestedPosition is Vector3 newRequestedPositionValue)
+        {
+            serverRequestedPosition = newRequestedPositionValue;
+        }
         shouldUpdateToServerPosition = true;
     }
+
+    public void setServerRequestedAction(int actionId, int actionFrame = 0)
+    {
+        //TODO
+    }
+
     void moveByNextTick(Vector2 arg_dest)
     {
 
@@ -159,6 +160,11 @@ public class MultiplayerGameObject : MonoBehaviour
         float Calculatedspeed = distance / ServerConstants.tick_duration;
 
         this.moveToLocationStraight(arg_dest, Calculatedspeed);
+    }
+
+    public void destroyGameObject()
+    {
+        Destroy(gameObject);
     }
 }
 

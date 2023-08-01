@@ -17,6 +17,23 @@ using System.Linq;
 
 */
 
+enum clientRequestTypes: byte
+{
+    userLogin = 1,
+    getRtt = 2,
+    sendClientState = 4,
+    ackRequest = 5
+};
+
+enum serverResponseTypes: byte
+{
+    getRtt = 2,
+    sendServerState=3,
+    ackRequest = 5,
+    sendServerDelta=6,
+};
+
+
 public class NetworkAdapter : MonoBehaviour
 {
     private UdpClient client = new UdpClient();
@@ -32,13 +49,13 @@ public class NetworkAdapter : MonoBehaviour
     private double msLatency;
     private DateTime beforeClientSend;
 
+    private Int64 lastServerStateUpdateTimestamp = 0;
+
     public GameObject playerCharacterPrefab;
     public GameObject otherCharacterPrefab;
     private int playerUid = 0;
     private GameObject playerCharacter;
-    //tmp
-    private GameObject newGameObject;
-    //end tmp
+    private List<KeyValuePair<uint, ServerGameObjectState>> scheduledGameObjectInstantiations = new List<KeyValuePair<uint, ServerGameObjectState>>();
     private ControllablePlayer characterControllablePlayer;
 
     public static NetworkAdapter networkAdapterInstance = null;
@@ -54,7 +71,7 @@ public class NetworkAdapter : MonoBehaviour
 
         NetworkAdapter.networkAdapterInstance = this;
 
-        byte[] data = { 1, 0, 0 };
+        byte[] data = { (byte)clientRequestTypes.userLogin, 0, 0 };
         reliableRequester.sendRequest(data, 0, 2000);
 
         networkedClock.init(client);
@@ -76,13 +93,14 @@ public class NetworkAdapter : MonoBehaviour
         
     }
 
-    private void Update()
+    void Update()
     {
         if(playerUid != 0 && !playerCharacter)
         {
             instantiatePlayer(playerUid);
             //playerUid = 0;
         }
+        instantiateScheduledGameObjects();
     }
 
     void sendData(byte[] dataToSend)
@@ -98,10 +116,10 @@ public class NetworkAdapter : MonoBehaviour
     }
 
     // Update is called once per frame
-    private void routeServerData(byte[] receivedData)
+    void routeServerData(byte[] receivedData)
     {
         switch (receivedData[0]) {
-            case 2:
+            case (byte)serverResponseTypes.getRtt:
                 //Client RTT response
                 Int64 receiveTimeStamp = NetworkedClock.getLocalTimestampMs();
                 Debug.Log("Received response to client RTT");
@@ -109,30 +127,98 @@ public class NetworkAdapter : MonoBehaviour
                 Int64 sendTimeStamp = BitConverter.ToInt64(receivedData, 9);
                 networkedClock.handleTTSRes(sendTimeStamp, receiveTimeStamp, serverTimeStamp);
                 break;
-            case 3:
-                KeyValuePair<Int64, Dictionary<uint, Vector3>> newState = decodeReceivedGameState(receivedData);
-                foreach (KeyValuePair<uint, Vector3> oneVectorPosition in newState.Value)
+            case (byte)serverResponseTypes.sendServerState:
+                this.ackRequest(ref receivedData);
+                ServerGameState newState = ServerGameState.fromServerStateRequest(receivedData);
+                if(newState.Timestamp < lastServerStateUpdateTimestamp)
                 {
-                    if (oneVectorPosition.Key == playerUid)
+                    Debug.Log("Ignored state because it's too old");
+                    return;
+                }
+                lastServerStateUpdateTimestamp = newState.Timestamp;
+                //KeyValuePair<Int64, Dictionary<uint, Vector3>> newState = decodeReceivedGameState(receivedData);
+                foreach (KeyValuePair<uint, ServerGameObjectState> oneGameObjectWithUid in newState.GameObjectsStates)
+                {
+                    uint oneObjectUid = oneGameObjectWithUid.Key;
+                    ServerGameObjectState oneGameObject = oneGameObjectWithUid.Value;
+                    if (oneObjectUid == playerUid)
                     {
                         //current object is the player
-                        characterControllablePlayer.setServerRequestedPosition(newState.Key, oneVectorPosition.Value);
+                        characterControllablePlayer.setServerRequestedPosition(newState.Timestamp, oneGameObject.Position);
                     }
-                    else if(MultiplayerGameObject.dict.ContainsKey(oneVectorPosition.Key)) {
+                    else if(MultiplayerGameObject.dict.ContainsKey(oneObjectUid)) {
                         //current object is not a player, but an already instantiated object
-                        MultiplayerGameObject.dict[oneVectorPosition.Key].setServerRequestedPosition(oneVectorPosition.Value);
+                        MultiplayerGameObject.dict[oneObjectUid].setServerRequestedPosition(oneGameObject.Position);
                     }
                     else
                     {
                         //current object is new to client and needs to be instantiated
-                        instantiateGameObject(oneVectorPosition.Key, oneVectorPosition.Value);
+                        scheduleGameObjectInstantiation(oneObjectUid, oneGameObject);
                     }
                 }
                 break;
-            case 5:
+            case (byte)serverResponseTypes.ackRequest:
                 short requestId = BitConverter.ToInt16(receivedData, 1);
                 byte[] originalRequest = reliableRequester.handleResponse(requestId);
                 routeServerResponse(originalRequest, receivedData);
+                break;
+
+            case (byte)serverResponseTypes.sendServerDelta:
+                ackRequest(ref receivedData);
+                ServerGameState characterGameState = ServerGameState.fromServerDeltaRequest(receivedData);
+                Debug.Log(characterGameState);
+                if(characterGameState.Timestamp < lastServerStateUpdateTimestamp)
+                {
+                    Debug.Log("Ignored delta because it's too old");
+                    return; 
+                }
+
+                List<uint> notYetUpdatedGameObjectsPositions = MultiplayerGameObject.dict.Keys.ToList<uint>();
+                characterControllablePlayer.setServerRequestedPosition(characterGameState.Timestamp, characterGameState.GameObjectsStates[(uint)playerUid].Position);
+
+                ServerStatesDelta serverStateDelta = ServerStatesDelta.fromServerBuffer(receivedData);
+                foreach(StateDelta oneDelta in serverStateDelta.GameObjectsStateDelta)
+                {
+                    switch (oneDelta.ChangeType)
+                    {
+                        case (changeTypes.created):
+                            Debug.Log("Received created");
+                            if(!(oneDelta.NewPosition is Vector3 newObjectPosition))
+                            {
+                                Debug.Log("Not all values were given to instantiate this object. Ignoring it for now");
+                                continue;
+                            }
+                            //Todo: vérifier que l'objet avec cet uid n'est pas déjà instantié avant d'en re-instantier un, sinon, ignorer (on reçevra une requête "update dès que l'ack arrivera au serveur)
+                            ServerGameObjectState newGameObjectState = new ServerGameObjectState(newObjectPosition, oneDelta.NewActionId ?? 0, oneDelta.NewActionFrame ?? 0);
+                            scheduleGameObjectInstantiation(oneDelta.Uid, newGameObjectState);
+                            break;
+                        case (changeTypes.updated):
+                            //TODO: vérifier que l'objet existe bien, sinon, ignorer requête (l'objet a probablement été supprimé avant, le serveur n'aurait pas envoyé de "update" si on n'avait 
+                            if (oneDelta.NewPosition is Vector3 updatedObjectPosition)
+                            {
+                                MultiplayerGameObject.dict[oneDelta.Uid].setServerRequestedPosition(updatedObjectPosition);
+                            }
+                            else
+                            {
+                                notYetUpdatedGameObjectsPositions.Remove(oneDelta.Uid);
+                            }
+                            if (oneDelta.NewActionId is int updatedObjectActionId)
+                            {
+                                MultiplayerGameObject.dict[oneDelta.Uid].setServerRequestedAction(updatedObjectActionId, oneDelta.NewActionFrame ?? 0);
+                            }
+                            break;
+                        case (changeTypes.deleted):
+                            MultiplayerGameObject.dict[oneDelta.Uid].destroyGameObject();
+                            notYetUpdatedGameObjectsPositions.Remove(oneDelta.Uid);
+                            break;
+                    }
+                }
+
+                foreach(uint oneNotUpdatedGameObjectUid in notYetUpdatedGameObjectsPositions)
+                {
+                    MultiplayerGameObject.dict[oneNotUpdatedGameObjectUid].setServerRequestedPosition(null);
+                }
+
                 break;
             default:
                 Debug.Log("Received unknown request type. Ignoring");
@@ -148,7 +234,7 @@ public class NetworkAdapter : MonoBehaviour
         byte requestType = originalRequest[0];
         switch (requestType)
         {
-            case 1:
+            case (byte)clientRequestTypes.userLogin:
                 int uid = BitConverter.ToInt32(response, 3);
                 playerUid = uid;
                 Debug.Log($"Received player uid from server: {playerUid}");
@@ -180,34 +266,20 @@ public class NetworkAdapter : MonoBehaviour
         }
         catch(Exception ex)
         {
-            Debug.Log($"Error in receiveCallbalk: ${ex.Message}");
+            Debug.LogError($"Error in receiveCallbalk: {ex.Message}");
         }
 
     }
 
-    //Data format: server_timestamp[8], gameObjectId[4], x[4], y[4], z[4] => buffer size = (gameObjects.size() * 4) + 1
-    private KeyValuePair<Int64, Dictionary<uint, Vector3>> decodeReceivedGameState(byte[] receivedData)
+    private void ackRequest(ref byte[] receivedData, int timestampIndex=1)
     {
-        Dictionary<uint, Vector3> decodedData = new Dictionary<uint, Vector3>();
-        //Debug.Log("data size: ");
-        //Debug.Log(receivedData.Length);
-        Int64 server_timestamp = BitConverter.ToInt64(receivedData, 1);
-        int objectsCount = (receivedData.Length - 9 )/16;
-        for(int i = 0; i<objectsCount; i++)
+        byte[] responseBuffer = new byte[9];
+        responseBuffer[0] = (byte) clientRequestTypes.ackRequest; 
+        for(int i = timestampIndex; i <= timestampIndex + 7; i++)
         {
-            uint objectIndex = BitConverter.ToUInt32(receivedData, 9 + (16 * i));
-            float x = BitConverter.ToSingle(receivedData, 13 + (16 * i));
-            float y = BitConverter.ToSingle(receivedData, 17 + (16 * i));
-            float z = BitConverter.ToSingle(receivedData, 21 + (16 * i));
-            //Debug.Log("Got position: ");
-            //Debug.Log(x);
-            //Debug.Log(y);
-            //Debug.Log(z);
-            decodedData[objectIndex] = new Vector3(x, y, z);
+            responseBuffer[i] = receivedData[i];
         }
-
-        return new KeyValuePair<Int64, Dictionary<uint, Vector3>>(server_timestamp, decodedData);
-
+        this.sendData(responseBuffer);
     }
 
     public void sendPlayerGameState(ControllablePlayer player)
@@ -216,7 +288,7 @@ public class NetworkAdapter : MonoBehaviour
          * requestType[1]: 4, serverTime[8], x[4], y[4], z[4], r[4]
         */
         byte[] dataToSend = new byte[25];
-        dataToSend[0] = 4;
+        dataToSend[0] = (byte)clientRequestTypes.sendClientState;
         //push to data as byte list to dataToSend
         Buffer.BlockCopy(BitConverter.GetBytes(networkedClock.getRemoteTimestampMs()), 0, dataToSend, 1, 8);
         Buffer.BlockCopy(BitConverter.GetBytes(player.transform.position.x), 0, dataToSend, 9, 4);
@@ -251,10 +323,29 @@ public class NetworkAdapter : MonoBehaviour
 
     }
 
+    private void scheduleGameObjectInstantiation(uint gameObjectId, ServerGameObjectState scheduledGameObject)
+    {
+        Debug.Log($"Scheduled instantation of gameObject with uid: ${gameObjectId}");
+        scheduledGameObjectInstantiations.Add(new KeyValuePair<uint, ServerGameObjectState>(gameObjectId, scheduledGameObject));
+    }
+
+    private void instantiateScheduledGameObjects()
+    {
+        foreach(KeyValuePair<uint, ServerGameObjectState> oneObjectToInstantiate in scheduledGameObjectInstantiations)
+        {
+            if (!MultiplayerGameObject.dict.ContainsKey(oneObjectToInstantiate.Key))
+            {
+                Debug.Log($"Instantiating GameObject with uid: ${oneObjectToInstantiate.Key}");
+                instantiateGameObject(oneObjectToInstantiate.Key, oneObjectToInstantiate.Value.Position);
+            }
+        }
+        scheduledGameObjectInstantiations.Clear();
+    }
+
     private void instantiateGameObject(uint uid, Vector3 position)
     {
         Debug.Log($"Instantiating gameObject with uid: {uid}");
-        newGameObject = Instantiate(otherCharacterPrefab, position, Quaternion.identity);
+        GameObject newGameObject = Instantiate(otherCharacterPrefab, position, Quaternion.identity);
         MultiplayerGameObject newMultiplayerGameObject = newGameObject.GetComponent<MultiplayerGameObject>();
         newMultiplayerGameObject.setUid(uid);
     }
