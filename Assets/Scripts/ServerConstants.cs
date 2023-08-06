@@ -5,12 +5,12 @@ public class ServerConstants {
     public static float tick_duration = 1.0f / tickrate;
 
     //smtp_server
-    /*    public static string url = "51.68.94.216";
-        public static int server_port = 1826;*/
+    public static string url = "51.68.94.216";
+    public static int server_port = 1826;
 
     //localhost
-    public static string url = "127.0.0.1";
-    public static int server_port = 1826;
+    /*    public static string url = "127.0.0.1";
+        public static int server_port = 1826;*/
 
     public static int local_port = 25567;
     public static int saved_player_positions = 20;

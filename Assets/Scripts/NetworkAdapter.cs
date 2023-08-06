@@ -174,7 +174,10 @@ public class NetworkAdapter : MonoBehaviour
                 }
 
                 List<uint> notYetUpdatedGameObjectsPositions = MultiplayerGameObject.dict.Keys.ToList<uint>();
-                characterControllablePlayer.setServerRequestedPosition(characterGameState.Timestamp, characterGameState.GameObjectsStates[(uint)playerUid].Position);
+                if (characterControllablePlayer != null)
+                {
+                    characterControllablePlayer.setServerRequestedPosition(characterGameState.Timestamp, characterGameState.GameObjectsStates[(uint)playerUid].Position);
+                }
 
                 ServerStatesDelta serverStateDelta = ServerStatesDelta.fromServerBuffer(receivedData);
                 foreach(StateDelta oneDelta in serverStateDelta.GameObjectsStateDelta)
@@ -196,7 +199,14 @@ public class NetworkAdapter : MonoBehaviour
                             //TODO: vérifier que l'objet existe bien, sinon, ignorer requête (l'objet a probablement été supprimé avant, le serveur n'aurait pas envoyé de "update" si on n'avait 
                             if (oneDelta.NewPosition is Vector3 updatedObjectPosition)
                             {
-                                MultiplayerGameObject.dict[oneDelta.Uid].setServerRequestedPosition(updatedObjectPosition);
+                                try
+                                {
+                                    MultiplayerGameObject.dict[oneDelta.Uid].setServerRequestedPosition(updatedObjectPosition);
+                                }
+                                catch (KeyNotFoundException notInstantiatedElementException)
+                                {
+                                    Debug.Log($"The element with uid {oneDelta.Uid} is not currently instantiated: Ignoring delta. {notInstantiatedElementException}");
+                                }
                             }
                             else
                             {
@@ -267,6 +277,7 @@ public class NetworkAdapter : MonoBehaviour
         catch(Exception ex)
         {
             Debug.LogError($"Error in receiveCallbalk: {ex.Message}");
+            Debug.LogError($"Trace: {ex.StackTrace}");
         }
 
     }
